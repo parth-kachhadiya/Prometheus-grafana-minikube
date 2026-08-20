@@ -1,0 +1,113 @@
+[1]. Prepare your app locally and test it.
+[2]. Create docker image of this application.
+[3]. Minikube
+     • `minikube start` 
+     • (Recommended) `minikube delete --all` (used to completely remove all local Kubernetes clusters, profiles, and their associated virtual machines or containers created by minikube)
+        If you ran above command, everything will be wiped out, so do fresh start once again by executing `minikube start`.
+     • (Optional) `minikube image list` (Check image list)
+     • `minikube image load <your-app-image-name>` (To load docker image in minikube).
+     • Now go to your directory where your app manifest file (.yaml) file exists and execute below command.
+       `kubectl apply -f flask-app.yaml`
+     • `minikube service <your-image-name_without-tag> --url` | `minikube service flask-metrics-app --url` (To get app access url)
+        NOTE : After executing this command, keep terminal open (Don't press Ctrl + C) and open that url on browser.  
+
+[4]. Install prometheus in minikube using `Helm`.
+     ⇨ Just like pip for python, Helm is the official package manager for Kubernetes.
+     ↪ Installation commands for windows
+        1. `choco install kubernetes-helm`
+        2. `scoop install helm`
+        3. `winget install Helm.Heml`
+     • `helm version` (To check version of helm)
+     • `helm repo add prometheus-community https://prometheus-community.github.io/helm-charts` (Get prometheus) 
+     • `helm repo update`
+     • (Optional) `help search repo prometheus` (Get details of prometheus)
+
+[5]. Use Helm to install prometheus in your minikube cluster
+     • `helm install prometheus prometheus-community/prometheus --namespace monitoring --create-namespace`
+     ⫸ Important (This is not absolute mendatory) :
+        → After executing above command, you will see some messages on your screen.
+          1. Copy a line which will look like this..
+              a. `export POD_NAME=$(kubectl get pods --namespace monitoring -l "app.kubernetes.io/name=prometheus,app.kubernetes.io/instance=prometheus" -o jsonpath="{.items[0].metadata.name}")`
+              b. `kubectl --namespace monitoring port-forward $POD_NAME 9090`
+             And past both of them on Git Bash (Run as administrator) one-by-one.
+        → Check `localhost:9090`, you will see prometheus.
+
+                    Other way...
+        
+        → `kubectl get svc -n <namespace>` | `kubectl get svc -n monitoring` (Find service in monitoring namespace)
+        → `kubectl port-forward -n monitoring svc/prometheus-server 9090:80` (Expose prometheus locally, same technique as above one)
+
+                            +------------------------+
+                            |  Configure Prometheus  |
+                            +------------------------+
+
+
+[6]. Configure prometheus to access our flask app
+     • `kubectl get svc` (Get IPs of your applications and Kubernetes cluster, find your app's IP and note it ClusterIP and PORT).
+        For my system : 10.100.15.80 - 5000:30166/TCP
+     • `kubectl edit configmap prometheus-server -n monitoring` (This will open file in notepad, Update the prometheus config to add your flask app as a scrap target.)
+     • Look for the `scrape_configs` section and add..
+        ```
+        scrape_configs:
+          - job_name: 'flask-app'
+            static_configs:
+              - targets: ['10.100.15.80:5000]
+        ``` 
+        → Don't copy `scrape_configs` also, since it is already there also make sure about indentation.
+        → As you close this notepad file, it will show success message.
+
+[7]. Stop prometheus server (If running) and restart it (Follow any of given 2 steps).
+     (1). ⇨ `kubectl get pods -n monitoring --show-labels` (Identify the label of exact prometheus server pod)
+             identify the exact label for the 'prometheus-server-xxxxxxx' pod
+          ⇨ `kubectl delete pod -l app.kubernetes.io/name=prometheus-abc -n monitoring` (Restart the pod using correct prometheus label) 
+          ⇨ `kubectl get pods -n monitoring` (Verify the pod is restarted) 
+    
+     (2). ⇨ `kubectl get deploy -n monitoring` (Get the deployment name, you should see an entry of prometheus-server)
+          ⇨ `kubectl rollout restart deployment prometheus-server -n monitoring` (Restart the deployment) 
+          ⇨ `kubectl get pods -n monitoring` (Verify that restart is done)
+
+[8]. After restarting pod, verify prometheus is scrapping metrics from your flask api : Do port forwarding to the prometheus dashboard
+     • `kubectl port-forward -n monitoring svc/prometheus-server 9090:80`
+
+[9]. Now you can check metrics.
+
+
+                            +-----------------------+
+                            |   Configure Grafana   |
+                            +-----------------------+
+
+[1]. Install Grafana on minikube cluster.
+     • `helm repo add grafana https://grafana.github.io/helm-charts`
+     • `helm repo update`
+
+[2]. Install Grafana in your monitoring namespace
+     • `helm install grafana grafana/grafana -n monitoring --create-namespace`
+
+[3]. Do settings to make grafana accessable locally 
+     ⇨ But first check that grafana is installed.
+        • `kubectl get pods -n monitoring`
+     ⇨ Verify the service is created.
+        • `kubectl get svc -n monitoring` (You should see : 80)
+
+     ▣ `kubectl port-forward svc/grafana -n monitoring 3000:80` (Do port forwarding but only for local test)
+        NOTE : If port `3000` shows busy than try `3001` or other combinations.
+
+[4]. Login to grafana
+     ⇨ Username : admin 
+     ⇨ Password :
+        In bash : `kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}" | base64 --decode ; echo`
+        In powershell : 
+            1. `kubectl get secret --namespace monitoring grafana -o jsonpath="{.data.admin-password}"`
+                • The above command will give you a code, copy it and put it into below command (replace `<You Code>` with that code) and execute it.
+
+            2. `[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("<You Code>"))`
+                • Now this 2nd command (after putting actual code) will give you the correct password which will end with `Gh6`.
+
+
+
+                            +----------------------------------+
+                            |   Add prometheus as datasource   |
+                            +----------------------------------+
+
+[1]. Connection > Data Source > Add new data source > Prometheus >
+     (Since prometheus is running inside cluster , use cluster IP service URL) `http://prometheus-server.monitoring.svc.cluster.local:80` > `Save & Test`
